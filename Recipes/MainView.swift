@@ -5,28 +5,63 @@
 //
 
 import SwiftUI
+import WebKit
 
 struct MainView: View {
-    @State private var recipes: [Recipe] = []
+    @State private var viewModel: MainViewModel = MainViewModel()
     
     var body: some View {
         NavigationStack {
             VStack {
-                Image(systemName: "books.vertical")
-                    .imageScale(.large)
-
+                MainViewModel.Constants.placeholderImage
+                
                 List {
-                    ForEach(recipes) { recipe in
+                    if viewModel.recipes.isEmpty {
+                        displayNoRecipes()
+                    } else {
+                        buildCells()
+                    }
+                }
+                .refreshable(action: { await viewModel.loadRecipes() })
+                .scrollContentBackground(.hidden)
+            }
+            .navigationTitle(MainViewModel.Constants.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .task {
+                await viewModel.loadRecipes()
+            }
+        }
+    }
+    
+    // MARK: Functions
+    
+    private func buildCells() -> some View {
+        ForEach(viewModel.cuisines, id: \.self) { cuisine in
+            Section(content: {
+                ForEach(viewModel.recipes) { recipe in
+                    if recipe.cuisine == cuisine {
                         recipeCell(recipe: recipe)
                     }
                 }
-                .task {
-                    await loadRecipes()
-                }
-                .scrollContentBackground(.hidden)
+            },
+                    header: { Text(cuisine) },
+                    footer: {}
+            )
+        }
+    }
+    
+    private func displayNoRecipes() -> some View {
+        HStack {
+            Spacer()
+            VStack {
+                Text(MainViewModel.Constants.emptyListTitle)
+                    .font(.title2)
+                Text(MainViewModel.Constants.emptyListIcon)
+                    .font(.largeTitle)
+                Text(MainViewModel.Constants.emptyListSubTitle)
             }
-            .navigationTitle("Recipes")
-            .navigationBarTitleDisplayMode(.inline)
+            .frame(height: 500)
+            Spacer()
         }
     }
     
@@ -35,32 +70,39 @@ struct MainView: View {
             Text(recipe.name)
                 .font(.title2)
             Spacer()
-            if
-                (recipe.photoUrlSmall?.isEmpty != nil),
-                let photoString = recipe.photoUrlSmall,
-                let photoUrl = URL(string: photoString) {
-                    AsyncImage(url: photoUrl) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } placeholder: {
-                        Image(systemName: "books.vertical")
-                            .imageScale(.large)
-                    }
-                    .frame(width: 100)
-            } else {
-                Image(systemName: "books.vertical")
-                    .imageScale(.large)
-            }
+            fetchAndCacheImage(for: recipe)
+                .frame(width: 75, height: 75)
         }
     }
     
-    private func loadRecipes() async {
-        do {
-            recipes = try await Fetcher.getRecipes(with: URLConstants.recipeURL)
-        } catch let error {
-            print("Error: \(error.localizedDescription)")
+    private func fetchAndCacheImage(for recipe: Recipe) -> some View {
+        let placeholderImage = AnyView(MainViewModel.Constants.placeholderImage)
+        
+        if let imageIndex = viewModel.photos.index(forKey: recipe.id) {
+            return viewModel.photos[imageIndex].value
         }
+        
+        guard
+            let urlString = recipe.photoUrlSmall,
+            let url = URL(string: urlString) else {
+            return placeholderImage
+        }
+        
+        let resizedImage = AnyView(AsyncImage(url: url) { phase in
+            if let image = phase.image {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if phase.error != nil {
+                placeholderImage
+            } else {
+                ProgressView()
+            }
+        })
+        
+        viewModel.photos[recipe.id] = resizedImage
+        
+        return resizedImage
     }
 }
 
